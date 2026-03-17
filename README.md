@@ -11,14 +11,14 @@ UE5 developers can already choose compression formats per texture — BC1, BC5, 
 | Format | Bitrate | Notes |
 |---|---|---|
 | BC1 | 4 bpp | fixed |
-| BC5 | 4 bpp | fixed |
+| BC5 | 8 bpp | fixed |
 | BC7 | 8 bpp | fixed |
 | ASTC 4×4 | 8 bpp | fixed |
 | ASTC 8×8 | 2 bpp | fixed |
 
 There is no intermediate option. A developer who wants something between BC1 and BC7 has no choice. And regardless of format, developers must make separate format decisions for each target platform — BC7 for PC, ASTC for mobile — duplicating cook passes and pak storage.
 
-Unreal Engine 5's **Oodle Texture RDO** improves on this by making GPU block data more compressible inside the pak, with no quality cost. But it is still bound by these fixed bitrate floors — it cannot compress below what the GPU format physically requires.
+Unreal Engine 5's **Oodle Texture RDO** improves on this by making GPU block data more compressible inside the pak, with negligible quality cost at typical settings. But it is still bound by these fixed bitrate floors — it cannot compress below what the GPU format physically requires.
 
 ### What Basis Universal makes possible
 
@@ -64,7 +64,7 @@ A key architectural advantage of the Basis Universal approach is that **one KTX2
 | Platform | Transcodes to | Cost (measured on PC) |
 |---|---|---|
 | PC / Console (DX12/Vulkan) | BC5_RG (normal) | ~128 ms / 2048×2048 |
-| PC / Console (DX12/Vulkan) | BC7 (albedo) | ~397 ms / 2048×2048 |
+| PC / Console (DX12/Vulkan) | BC1 (albedo) | ~20 ms / 2048×2048 |
 | Mobile (ASTC) | ASTC 8×8 | ~33 ms / 2048×2048 |
 | Mobile (ETC2 fallback) | ETC2 | supported by transcoder |
 
@@ -100,8 +100,9 @@ XUASTC LDR 8×8 at 27.2 dB PSNR was visually acceptable in this demo scene under
 | Target format | Time |
 |---|---|
 | BC5_RG (normal maps) | ~128 ms |
-| BC7_RGBA | ~397 ms |
-| ASTC 8×8 (mobile) | ~33 ms |
+| BC1_RGB (albedo) | ~20 ms |
+| BC7_RGBA (reference only) | ~397 ms |
+| ASTC 8×8 (mobile, PC measurement) | ~33 ms |
 
 ---
 
@@ -116,7 +117,7 @@ BasisDemo.uproject
 │       └── Source/
 │           ├── BasisUniversalTexture/
 │           │   ├── Private/
-│           │   │   ├── BasisTextureLoader.cpp   # Transcode to BC5/RGBA32
+│           │   │   ├── BasisTextureLoader.cpp   # Transcode to BC5/BC1
 │           │   │   ├── BasisTexture.cpp
 │           │   │   └── ThirdParty/
 │           │   │       ├── BasisUniversal/      # basis_universal v2.10 transcoder
@@ -184,7 +185,7 @@ Runs `reimport_normals_uastc.py` via `UnrealEditor-Cmd.exe` to reimport KTX2 ass
 ## Plugin Implementation Notes
 
 - Normal maps (filename contains `_nor_`) are transcoded to **BC5_RG** — the correct 2-channel GPU format for DX normal maps.
-- All other textures use **RGBA32** for broad UE5 compatibility.
+- All other textures are transcoded to **BC1_RGB** — matching the Standard build's albedo format.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
 
@@ -196,7 +197,7 @@ This demo was developed to evaluate Basis Universal as a practical texture compr
 
 1. **Accurate comparison** — enabling Oodle Texture RDO on the Standard build ensures a fair baseline
 2. **XUASTC LDR discovery** — demonstrating the first known UE5 integration of the XUASTC LDR format
-3. **Mobile-first potential** — XUASTC 8×8 → ASTC 8×8 transcoding is nearly free on mobile hardware (~33 ms), and the KTX2 supercompression achieves significantly smaller disk sizes than shipping raw ASTC blocks
+3. **Mobile-first potential** — XUASTC 8×8 → ASTC 8×8 transcoding is nearly free on mobile hardware (~33 ms measured on PC), adding domain-specific supercompression on top of standard ASTC blocks
 
 ---
 
