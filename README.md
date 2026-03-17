@@ -53,14 +53,20 @@ All comparisons are made against a **fair baseline**: the Standard build has Ood
 
 ### Mobile (ASTC devices)
 
-| | Standard (ASTC 4×4) | Basis (XUASTC LDR 8×8) |
-|---|---|---|
-| Disk (10 normal maps) | ~40 MB (estimated) | **8.3 MB (measured)** |
-| Runtime decode cost | native | ~33 ms (decompress supercompression only) |
+| | ASTC 4×4 raw | ASTC 8×8 raw | XUASTC LDR 8×8 |
+|---|---|---|---|
+| Disk (10 normal maps) | ~40 MB (estimated) | ~10 MB (estimated) | **8.3 MB (measured)** |
+| Bitrate | 8 bpp | 2 bpp | 2 bpp + supercompression |
+| Runtime decode cost | native | native | ~33 ms (decompress only) |
 
-The Standard figure (~40 MB) is a theoretical estimate based on raw ASTC 4×4 block size (4 MB × 10 textures); an actual mobile cook with Oodle compression would be somewhat smaller. The Basis figure (8.3 MB) is the measured size of the KTX2 files produced by this pipeline. XUASTC's Weight Grid DCT + RDO supercompression operates on the ASTC block data itself, achieving results well beyond what general-purpose pak compression can deliver on pre-compressed GPU texture data.
+The size reduction breaks down into two independent contributions:
 
-On ASTC-capable devices, XUASTC LDR 8×8 decompresses directly to native ASTC 8×8 blocks — nearly zero transcoding overhead.
+1. **Block size: 4×4 → 8×8** — reduces raw bitrate from 8 bpp to 2 bpp, a 4× reduction. This is a quality/size tradeoff available with standard ASTC as well.
+2. **XUASTC supercompression** — Weight Grid DCT + RDO applied on top of the ASTC 8×8 block data, reducing ~10 MB to **8.3 MB** (an additional ~17%). General-purpose pak compression cannot achieve this because GPU texture data is already entropy-coded.
+
+The measured 8.3 MB figure is the KTX2 file size. ASTC figures are theoretical estimates (raw block size × texture count); an actual mobile cook with Oodle RDO would be somewhat smaller.
+
+On ASTC-capable devices, XUASTC LDR 8×8 decompresses directly to native ASTC 8×8 blocks with nearly zero transcoding overhead (~33 ms for supercompression removal only).
 
 ### Single pak for all platforms (design goal)
 
