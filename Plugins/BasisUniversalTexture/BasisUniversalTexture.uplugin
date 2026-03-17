@@ -1,0 +1,29 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "Basis Universal Texture",
+    "Description": "Runtime transcoding of ETC1S/UASTC (Basis Universal) textures to BC7/ASTC, reducing package and install size while maintaining GPU-native formats at runtime.",
+    "Category": "Rendering",
+    "CreatedBy": "komm64",
+    "CreatedByURL": "https://x.com/komm64",
+    "DocsURL": "",
+    "MarketplaceURL": "",
+    "SupportURL": "",
+    "CanContainContent": true,
+    "IsBetaVersion": true,
+    "IsExperimentalVersion": false,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "BasisUniversalTexture",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        },
+        {
+            "Name": "BasisUniversalTextureEditor",
+            "Type": "Editor",
+            "LoadingPhase": "Default"
+        }
+    ]
+}

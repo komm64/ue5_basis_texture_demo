@@ -1,0 +1,19 @@
+{
+    "FileVersion": 3,
+    "EngineAssociation": "5.7",
+    "Category": "",
+    "Description": "Demo project for BasisUniversalTexture plugin",
+    "Modules": [
+        {
+            "Name": "BasisDemo",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        }
+    ],
+    "Plugins": [
+        {
+            "Name": "BasisUniversalTexture",
+            "Enabled": true
+        }
+    ]
+}

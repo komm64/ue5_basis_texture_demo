@@ -1,0 +1,223 @@
+#include "BasisTextureLoader.h"
+
+#include "Engine/Texture2D.h"
+#include "RenderUtils.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "RHI.h"
+#include "TextureResource.h"
+
+THIRD_PARTY_INCLUDES_START
+#pragma warning(push)
+#pragma warning(disable: 4800 4267 4244 4456 4127 4100 4701 4668)
+#include "basisu_transcoder.h"
+#pragma warning(pop)
+THIRD_PARTY_INCLUDES_END
+
+// ------------------------------------------------------------------
+// UBasisTextureLoader implementation
+// ------------------------------------------------------------------
+// Normal maps (filename contains "nor"): transcoded to BC5_RG (2-channel,
+// 0.5 bpp) — correct GPU format for DX normal maps.
+// Albedo/other: transcoded to RGBA32 for reliable UE5 compatibility.
+// ------------------------------------------------------------------
+
+// KTX2 magic: 0xAB 'K' 'T' 'X' ' ' '2' '0' 0xBB
+static bool IsKTX2(const void* pData, uint32 DataSize)
+{
+    if (DataSize < 12) return false;
+    static const uint8 KTX2Magic[8] = { 0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB };
+    return FMemory::Memcmp(pData, KTX2Magic, 8) == 0;
+}
+
+UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasisTranscodeInfo& OutInfo)
+{
+    // ---- 1. Read file ------------------------------------------------
+    TArray<uint8> FileData;
+    if (!FFileHelper::LoadFileToArray(FileData, *FilePath))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: failed to load: %s"), *FilePath);
+        return nullptr;
+    }
+
+    OutInfo.CompressedFileSize = FileData.Num();
+
+    const void*  pData    = FileData.GetData();
+    const uint32 DataSize = static_cast<uint32>(FileData.Num());
+
+    uint32 Width = 0, Height = 0;
+    TArray<uint8> Pixels;
+
+    // ---- 2. Detect format and transcode ------------------------------
+    if (IsKTX2(pData, DataSize))
+    {
+        // --- KTX2 path (supports UASTC+Zstd, XUASTC LDR, ETC1S) ---
+        basist::ktx2_transcoder KTrans;
+        if (!KTrans.init(pData, DataSize))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 init failed: %s"), *FilePath);
+            return nullptr;
+        }
+        if (!KTrans.start_transcoding())
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 start_transcoding failed"));
+            return nullptr;
+        }
+
+        Width  = KTrans.get_width();
+        Height = KTrans.get_height();
+
+        OutInfo.Width       = static_cast<int32>(Width);
+        OutInfo.Height      = static_cast<int32>(Height);
+        OutInfo.MipLevels   = 1;
+        {
+            const basist::basis_tex_format Fmt = KTrans.get_basis_tex_format();
+            const char* FmtName = basist::basis_get_tex_format_name(Fmt);
+            OutInfo.SourceFormat = FString::Printf(TEXT("%hs (.ktx2)"), FmtName);
+        }
+
+        const bool bIsNormalMap = FilePath.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
+
+        if (bIsNormalMap)
+        {
+            // BC5_RG: 16 bytes per 4x4 block (two BC4 channels)
+            const uint32 BlocksX   = (Width  + 3) / 4;
+            const uint32 BlocksY   = (Height + 3) / 4;
+            const uint32 NumBlocks = BlocksX * BlocksY;
+            Pixels.SetNumUninitialized(NumBlocks * 16);
+
+            if (!KTrans.transcode_image_level(
+                    0, 0, 0,
+                    Pixels.GetData(), NumBlocks,
+                    basist::transcoder_texture_format::cTFBC5_RG))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 BC5 transcode failed"));
+                return nullptr;
+            }
+        }
+        else
+        {
+            // BC1_RGB: 8 bytes per 4x4 block
+            const uint32 BlocksX   = (Width  + 3) / 4;
+            const uint32 BlocksY   = (Height + 3) / 4;
+            const uint32 NumBlocks = BlocksX * BlocksY;
+            Pixels.SetNumUninitialized(NumBlocks * 8);
+
+            if (!KTrans.transcode_image_level(
+                    0, 0, 0,
+                    Pixels.GetData(), NumBlocks,
+                    basist::transcoder_texture_format::cTFBC1_RGB))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 BC1 transcode failed"));
+                return nullptr;
+            }
+        }
+    }
+    else
+    {
+        // --- Legacy .basis path (ETC1S or UASTC without supercompression) ---
+        basist::basisu_transcoder Trans;
+        if (!Trans.validate_header(pData, DataSize))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: invalid .basis header: %s"), *FilePath);
+            return nullptr;
+        }
+
+        basist::basisu_file_info FileInfo;
+        if (!Trans.get_file_info(pData, DataSize, FileInfo))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: get_file_info failed"));
+            return nullptr;
+        }
+        if (!Trans.start_transcoding(pData, DataSize))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: start_transcoding failed"));
+            return nullptr;
+        }
+
+        basist::basisu_image_info ImgInfo;
+        if (!Trans.get_image_info(pData, DataSize, ImgInfo, 0))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: get_image_info failed"));
+            return nullptr;
+        }
+
+        Width  = ImgInfo.m_width;
+        Height = ImgInfo.m_height;
+
+        OutInfo.Width       = static_cast<int32>(Width);
+        OutInfo.Height      = static_cast<int32>(Height);
+        OutInfo.MipLevels   = 1;
+        OutInfo.SourceFormat = (FileInfo.m_tex_format == basist::basis_tex_format::cUASTC_LDR_4x4)
+                               ? TEXT("UASTC (.basis)") : TEXT("ETC1S (.basis)");
+
+        // BC1_RGB: 8 bytes per 4x4 block
+        const uint32 BlocksX   = (Width  + 3) / 4;
+        const uint32 BlocksY   = (Height + 3) / 4;
+        const uint32 NumBlocks = BlocksX * BlocksY;
+        Pixels.SetNumUninitialized(NumBlocks * 8);
+
+        if (!Trans.transcode_image_level(
+                pData, DataSize, 0, 0,
+                Pixels.GetData(), NumBlocks,
+                basist::transcoder_texture_format::cTFBC1_RGB))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: transcode failed"));
+            return nullptr;
+        }
+    }
+
+    // ---- 4. Create UTexture2D ----------------------------------------
+    // Normal maps use BC5 (PF_BC5), albedo/other use BC1 (PF_DXT1).
+    const bool bIsNormalMap = FilePath.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
+    const EPixelFormat PixelFmt = bIsNormalMap ? PF_BC5 : PF_DXT1;
+
+    UTexture2D* Texture = UTexture2D::CreateTransient(Width, Height, PixelFmt);
+    if (!Texture)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: CreateTransient failed"));
+        return nullptr;
+    }
+
+    // Write pixel data into mip 0
+    {
+        FTexture2DMipMap& Mip0 = Texture->GetPlatformData()->Mips[0];
+        void* MipData = Mip0.BulkData.Lock(LOCK_READ_WRITE);
+        FMemory::Memcpy(MipData, Pixels.GetData(), Pixels.Num());
+        Mip0.BulkData.Unlock();
+    }
+
+    Texture->NeverStream = true;
+    Texture->UpdateResource();
+
+    // ---- 5. Fill stats -----------------------------------------------
+    // Estimate what BC7 w/ mips would cost for this resolution
+    OutInfo.TranscodedSize  = static_cast<int64>(EstimateBC7Size(Width, Height, 1));
+    OutInfo.CompressionRatio = static_cast<float>(OutInfo.TranscodedSize)
+                             / static_cast<float>(OutInfo.CompressedFileSize);
+
+    UE_LOG(LogTemp, Log,
+        TEXT("BasisTextureLoader: loaded %s [%ux%u] %s | disk=%lld bytes | BC7equiv=%lld bytes | ratio=%.1fx"),
+        *FPaths::GetCleanFilename(FilePath),
+        Width, Height,
+        *OutInfo.SourceFormat,
+        OutInfo.CompressedFileSize,
+        OutInfo.TranscodedSize,
+        OutInfo.CompressionRatio);
+
+    return Texture;
+}
+
+int64 UBasisTextureLoader::EstimateBC7Size(int32 Width, int32 Height, int32 MipLevels)
+{
+    int64 Total = 0;
+    for (int32 L = 0; L < MipLevels; ++L)
+    {
+        const int32 W = FMath::Max(1, Width  >> L);
+        const int32 H = FMath::Max(1, Height >> L);
+        // BC7: 16 bytes per 4x4 block = 1 byte per pixel
+        Total += static_cast<int64>(W) * H;
+    }
+    return Total;
+}
