@@ -6,17 +6,19 @@ Install size directly affects user acquisition and retention across virtually al
 
 ### The problem with today's GPU texture formats
 
-UE5 developers can already choose compression formats per texture — BC1, BC5, BC7, ASTC, and so on. But all of these are **GPU-native formats with fixed bitrates**:
+UE5 developers can already choose compression formats per texture — BC1, BC5, BC7, ASTC, and so on. The PC-targeting BC family offers only three distinct bitrates:
 
 | Format | Bitrate | Notes |
 |---|---|---|
 | BC1 | 4 bpp | fixed |
 | BC5 | 8 bpp | fixed |
 | BC7 | 8 bpp | fixed |
-| ASTC 4×4 | 8 bpp | fixed |
-| ASTC 8×8 | 2 bpp | fixed |
 
-There is no intermediate option. A developer who wants something between BC1 and BC7 has no choice. And regardless of format, developers must make separate format decisions for each target platform — BC7 for PC, ASTC for mobile — duplicating cook passes and pak storage.
+There is no intermediate option for PC. A developer who wants something between BC1 and BC7 has no choice.
+
+ASTC is more flexible — it supports 14 block sizes spanning roughly 0.9 to 8 bpp — but **ASTC is not natively supported on PC (DX11/DX12)**. Shipping ASTC to PC requires software decoding or a separate BC fallback, which means developers targeting both PC and mobile must still maintain two separate format pipelines and two pak files.
+
+Regardless of format, developers must make separate format decisions for each target platform — BC7 for PC, ASTC for mobile — duplicating cook passes and pak storage.
 
 Unreal Engine 5's **Oodle Texture RDO** improves on this by making GPU block data more compressible inside the pak, with negligible quality cost at typical settings. But it is still bound by these fixed bitrate floors — it cannot compress below what the GPU format physically requires.
 
