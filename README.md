@@ -53,6 +53,24 @@ All comparisons are made against a **fair baseline**: the Standard build has Ood
 
 > The pak contains substantial shared shader data (~138 MB) identical in both builds. The texture-only reduction of **−64.7%** represents the actual compression improvement, which translates to proportionally larger savings in texture-heavy real-world projects.
 
+### Visual Comparison
+
+The following screenshots were taken at the same sun angle (Pitch −35°, Yaw 60°) with no emissive contribution — direct lighting only.
+
+**Brick wall (2048×2048)**
+
+| Standard (BC1/BC5 + Oodle RDO) | Basis (ETC1S + XUASTC LDR 8×8) |
+|:---:|:---:|
+| ![Standard brick](docs/screenshots/standard_brick.png) | ![Basis brick](docs/screenshots/basis_brick.png) |
+
+**Brown leather (2048×2048)**
+
+| Standard (BC1/BC5 + Oodle RDO) | Basis (ETC1S + XUASTC LDR 8×8) |
+|:---:|:---:|
+| ![Standard leather](docs/screenshots/standard_leather.png) | ![Basis leather](docs/screenshots/basis_leather.png) |
+
+> **Known limitation**: Some textures (particularly very light or highly saturated colors) show brightness differences between the two builds due to an unresolved sRGB handling issue with runtime-transcoded transient textures in UE5 5.7. The mid-tone textures shown above are not affected. This will be investigated and fixed in a post-submission update.
+
 ### Mobile (ASTC devices)
 
 On ASTC-capable devices, XUASTC LDR 8×8 decompresses directly to native ASTC 8×8 blocks with nearly zero transcoding overhead (~33 ms for supercompression removal only, measured on PC).
@@ -65,7 +83,7 @@ A key architectural advantage of the Basis Universal approach is that **one KTX2
 
 | Platform | Transcodes to | Cost (measured on PC) |
 |---|---|---|
-| PC / Console (DX12/Vulkan) | BC5_RG (normal) | ~128 ms / 2048×2048 |
+| PC / Console (DX12/Vulkan) | BC7_RGBA (normal) | ~397 ms / 2048×2048 |
 | PC / Console (DX12/Vulkan) | BC1 (albedo) | ~20 ms / 2048×2048 |
 | Mobile (ASTC) | ASTC 8×8 | ~33 ms / 2048×2048 |
 | Mobile (ETC2 fallback) | ETC2 | supported by transcoder |
@@ -101,9 +119,8 @@ XUASTC LDR 8×8 at 27.2 dB PSNR was visually acceptable in this demo scene under
 
 | Target format | Time |
 |---|---|
-| BC5_RG (normal maps) | ~128 ms |
+| BC7_RGBA (normal maps) | ~397 ms |
 | BC1_RGB (albedo) | ~20 ms |
-| BC7_RGBA (reference only) | ~397 ms |
 | ASTC 8×8 (mobile, PC measurement) | ~33 ms |
 
 ---
@@ -119,7 +136,7 @@ BasisDemo.uproject
 │       └── Source/
 │           ├── BasisUniversalTexture/
 │           │   ├── Private/
-│           │   │   ├── BasisTextureLoader.cpp   # Transcode to BC5/BC1
+│           │   │   ├── BasisTextureLoader.cpp   # Transcode to BC7/BC1
 │           │   │   ├── BasisTexture.cpp
 │           │   │   └── ThirdParty/
 │           │   │       ├── BasisUniversal/      # basis_universal v2.10 transcoder
@@ -153,8 +170,10 @@ BasisDemo.uproject
 
 Encodes all `*nor_dx*.png` files in `source_textures/` to KTX2 using:
 ```
-basisu <input>.png -ldr_8x8i -normal_map -quality 128 -effort 6 -output_file <output>.ktx2
+basisu <input>.png -ldr_8x8i -quality 128 -effort 6 -output_file <output>.ktx2
 ```
+
+> **Note**: The `-normal_map` flag is intentionally omitted. With `-normal_map`, basisu stores the Y component in the Alpha channel for better UASTC compression. However, this causes incorrect channel mapping when transcoding to BC5_RG at runtime (the G channel receives garbage data). Omitting `-normal_map` keeps XY in the standard RG channels.
 
 ### 2. Deploy KTX2 files
 
@@ -186,8 +205,9 @@ Runs `reimport_normals_uastc.py` via `UnrealEditor-Cmd.exe` to reimport KTX2 ass
 
 ## Plugin Implementation Notes
 
-- Normal maps (filename contains `_nor_`) are transcoded to **BC5_RG** — the correct 2-channel GPU format for DX normal maps.
-- All other textures are transcoded to **BC1_RGB** — matching the Standard build's albedo format.
+- Normal maps (filename contains `_nor_`) are transcoded to **BC7_RGBA** at runtime.
+- All other textures (albedo) are transcoded to **BC1_RGB** at runtime.
+- **Note on normal map format**: BC5_RG would be the preferred format (0.5 bpp vs BC7's 1 bpp, higher per-channel precision for 2-channel data), and the Standard build uses BC5 for its normal maps. However, transcoding XUASTC LDR to BC5_RG at runtime produced incorrect lighting regardless of channel layout or material sampler configuration. BC7_RGBA transcodes all channels correctly and resolves the issue. The root cause (likely a UE5 runtime behavior difference between transient `PF_BC5` textures and cooked BC5 assets) remains under investigation.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
 
